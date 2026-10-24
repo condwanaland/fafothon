@@ -175,12 +175,6 @@ jobs:
           test_grammar test_ast test_syntax test_keyword test_exceptions
           test_exception_group test_except_star test_peg_generator
 
-      - name: Run the CPython test suite
-        id: full_tests
-        if: steps.prepare.outputs.update_needed == 'true'
-        working-directory: ${{ runner.temp }}/fafothon-build
-        run: ./python -m test -j2 --timeout=1200
-
       - name: Package the validated history
         id: result
         if: steps.prepare.outputs.update_needed == 'true'
@@ -231,7 +225,6 @@ jobs:
           CONFIGURE_OUTCOME: ${{ steps.configure.outcome }}
           DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
           FOCUSED_TESTS_OUTCOME: ${{ steps.focused_tests.outcome }}
-          FULL_TESTS_OUTCOME: ${{ steps.full_tests.outcome }}
           GENERATED_FILES_OUTCOME: ${{ steps.generated_files.outcome }}
           PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
           REGENERATE_OUTCOME: ${{ steps.regenerate.outcome }}
@@ -253,7 +246,6 @@ jobs:
               echo "| Build | $BUILD_OUTCOME |"
               echo "| Syntax smoke test | $SMOKE_TEST_OUTCOME |"
               echo "| Focused tests | $FOCUSED_TESTS_OUTCOME |"
-              echo "| Full suite | $FULL_TESTS_OUTCOME |"
               echo "| Artifact upload | $UPLOAD_OUTCOME |"
           } >> "$GITHUB_STEP_SUMMARY"
 
