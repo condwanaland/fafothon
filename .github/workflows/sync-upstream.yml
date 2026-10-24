@@ -183,20 +183,23 @@ jobs:
       - name: Package the validated history
         id: result
         if: steps.prepare.outputs.update_needed == 'true'
+        env:
+          BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+          ORIGINAL_SHA: ${{ steps.prepare.outputs.original_sha }}
+          UPSTREAM_SHA: ${{ steps.prepare.outputs.upstream_sha }}
         run: |
-          original_sha=${{ steps.prepare.outputs.original_sha }}
-          upstream_sha=${{ steps.prepare.outputs.upstream_sha }}
-          base_sha=${{ steps.prepare.outputs.base_sha }}
           result_sha=$(git rev-parse HEAD)
           artifact_dir="$RUNNER_TEMP/fafothon-sync"
 
           mkdir -p "$artifact_dir"
           git bundle create "$artifact_dir/sync.bundle" \
-              refs/heads/sync-upstream-result "^$base_sha"
+              refs/heads/sync-upstream-result "^$BASE_SHA"
           git bundle verify "$artifact_dir/sync.bundle"
 
-          printf '%s\n' "$original_sha" > "$artifact_dir/original-sha"
-          printf '%s\n' "$upstream_sha" > "$artifact_dir/upstream-sha"
+          printf '%s\n' "$ORIGINAL_SHA" > "$artifact_dir/original-sha"
+          printf '%s\n' "$UPSTREAM_SHA" > "$artifact_dir/upstream-sha"
           printf '%s\n' "$result_sha" > "$artifact_dir/result-sha"
           echo "result_sha=$result_sha" >> "$GITHUB_OUTPUT"
 
@@ -204,8 +207,7 @@ jobs:
               echo "### Validation succeeded"
               echo
               echo "Validated result: \`$result_sha\`"
-              if [[ '${{ github.event_name }}' == workflow_dispatch && \
-                    '${{ inputs.dry_run }}' == true ]]; then
+              if [[ $EVENT_NAME == workflow_dispatch && $DRY_RUN == true ]]; then
                   echo
                   echo "Dry run requested; no commits or tags will be pushed."
               fi
@@ -223,6 +225,17 @@ jobs:
 
       - name: Summarize validation failure
         if: failure()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          CONFIGURE_OUTCOME: ${{ steps.configure.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          FOCUSED_TESTS_OUTCOME: ${{ steps.focused_tests.outcome }}
+          FULL_TESTS_OUTCOME: ${{ steps.full_tests.outcome }}
+          GENERATED_FILES_OUTCOME: ${{ steps.generated_files.outcome }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          REGENERATE_OUTCOME: ${{ steps.regenerate.outcome }}
+          SMOKE_TEST_OUTCOME: ${{ steps.smoke_test.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           {
               echo "### Upstream synchronisation validation failed"
@@ -231,16 +244,16 @@ jobs:
               echo
               echo "| Stage | Outcome |"
               echo "| --- | --- |"
-              echo "| Rebase | ${{ steps.prepare.outcome }} |"
-              echo "| Dependencies | ${{ steps.dependencies.outcome }} |"
-              echo "| Configure | ${{ steps.configure.outcome }} |"
-              echo "| Regeneration | ${{ steps.regenerate.outcome }} |"
-              echo "| Generated-file review | ${{ steps.generated_files.outcome }} |"
-              echo "| Build | ${{ steps.build.outcome }} |"
-              echo "| Syntax smoke test | ${{ steps.smoke_test.outcome }} |"
-              echo "| Focused tests | ${{ steps.focused_tests.outcome }} |"
-              echo "| Full suite | ${{ steps.full_tests.outcome }} |"
-              echo "| Artifact upload | ${{ steps.upload.outcome }} |"
+              echo "| Rebase | $PREPARE_OUTCOME |"
+              echo "| Dependencies | $DEPENDENCIES_OUTCOME |"
+              echo "| Configure | $CONFIGURE_OUTCOME |"
+              echo "| Regeneration | $REGENERATE_OUTCOME |"
+              echo "| Generated-file review | $GENERATED_FILES_OUTCOME |"
+              echo "| Build | $BUILD_OUTCOME |"
+              echo "| Syntax smoke test | $SMOKE_TEST_OUTCOME |"
+              echo "| Focused tests | $FOCUSED_TESTS_OUTCOME |"
+              echo "| Full suite | $FULL_TESTS_OUTCOME |"
+              echo "| Artifact upload | $UPLOAD_OUTCOME |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
@@ -258,6 +271,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: main
 
       - name: Download validated history
@@ -270,7 +284,10 @@ jobs:
         id: publish_result
         env:
           ARTIFACT_DIR: ${{ runner.temp }}/fafothon-sync
+          GH_TOKEN: ${{ github.token }}
         run: |
+          gh auth setup-git
+
           read_sha() {
               local value
               IFS= read -r value < "$1"
