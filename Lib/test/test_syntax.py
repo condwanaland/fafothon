@@ -3285,6 +3285,55 @@ class SyntaxErrorTestCase(unittest.TestCase):
                           r"cannot have both 'except' and 'except\*' on the same 'try'",
                           lineno=3, end_lineno=3, offset=1, end_offset=7)
 
+    def test_try_alias_errors(self):
+        self._check_error(
+            "fuck_around:\npass",
+            "expected an indented block after 'try' statement on line 1",
+            subclass=IndentationError,
+            lineno=2,
+        )
+        self._check_error(
+            "fuck_around:\n    pass\nfind_out ValueError:\npass",
+            "expected an indented block after 'except' statement on line 3",
+            subclass=IndentationError,
+            lineno=4,
+        )
+        self._check_error(
+            "fuck_around:\n    pass",
+            "expected 'except' or 'finally' block",
+        )
+        self._check_error(
+            "fuck_around:\n    pass\nfind_out ValueError\n    pass",
+            "expected ':'",
+            lineno=3,
+        )
+        self._check_error(
+            "fuck_around:\n    pass\nfind_out*:\n    pass",
+            "expected one or more exception types",
+            lineno=3,
+        )
+        self._check_error(
+            "fuck_around: pass\nexcept ValueError: pass\nfind_out* TypeError: pass",
+            r"cannot have both 'except' and 'except\*' on the same 'try'",
+            lineno=3,
+            end_lineno=3,
+            offset=1,
+            end_offset=10,
+        )
+        self._check_error(
+            "try: pass\nfind_out* ValueError: pass\nexcept TypeError: pass",
+            r"cannot have both 'except' and 'except\*' on the same 'try'",
+            lineno=3,
+            end_lineno=3,
+            offset=1,
+            end_offset=7,
+        )
+        self._check_error(
+            "fuck_around: pass\nfind_out ValueError as obj.attr: pass",
+            "cannot use except statement with attribute",
+            lineno=2,
+        )
+
     def test_empty_line_after_linecont(self):
         # See issue-40847
         s = r"""\

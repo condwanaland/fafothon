@@ -44,6 +44,8 @@ class Test_iskeyword(unittest.TestCase):
         self.assertIn("match", keyword.softkwlist)
         self.assertIn("case", keyword.softkwlist)
         self.assertIn("_", keyword.softkwlist)
+        self.assertIn("fuck_around", keyword.softkwlist)
+        self.assertIn("find_out", keyword.softkwlist)
 
     def test_keywords_are_sorted(self):
         self.assertListEqual(sorted(keyword.kwlist), keyword.kwlist)
