@@ -2,6 +2,7 @@
 # This just tests whether the parser accepts them all.
 
 import annotationlib
+import ast
 import inspect
 import unittest
 import sys
@@ -1448,6 +1449,96 @@ class GrammarTests(unittest.TestCase):
             compile("try:\n    pass\nexcept* Exception as a.b:\n    pass", "?", "exec")
             compile("try:\n    pass\nexcept* Exception as a[b]:\n    pass", "?", "exec")
             compile("try:\n    pass\nexcept*:\n    pass", "?", "exec")
+
+    def test_try_aliases(self):
+        namespace = {}
+        exec(textwrap.dedent("""
+            fuck_around = 10
+            find_out = 20
+            result = [fuck_around + find_out]
+
+            fuck_around:
+                raise ValueError("typed")
+            find_out TypeError:
+                result.append("wrong")
+            find_out ValueError as exc:
+                result.append(str(exc))
+            else:
+                result.append("wrong else")
+            finally:
+                result.append("typed finally")
+
+            try:
+                raise KeyError("new handler")
+            except TypeError:
+                result.append("wrong")
+            find_out KeyError as exc:
+                result.append(exc.args[0])
+
+            fuck_around:
+                raise RuntimeError("old handler")
+            find_out TypeError:
+                result.append("wrong")
+            except RuntimeError as exc:
+                result.append(str(exc))
+
+            fuck_around:
+                raise OSError
+            find_out:
+                result.append("bare")
+
+            fuck_around:
+                result.append("body")
+            find_out Exception:
+                result.append("wrong")
+            else:
+                result.append("else")
+            finally:
+                result.append("finally")
+
+            fuck_around:
+                raise ExceptionGroup("group", [ValueError("group value")])
+            find_out* ValueError as exc:
+                result.append(exc.exceptions[0].args[0])
+        """), namespace)
+        self.assertEqual(
+            namespace["result"],
+            [
+                30,
+                "typed",
+                "typed finally",
+                "new handler",
+                "old handler",
+                "bare",
+                "body",
+                "else",
+                "finally",
+                "group value",
+            ],
+        )
+
+    def test_try_alias_ast(self):
+        cases = [
+            (
+                "try:\n    pass\nexcept ValueError as exc:\n    pass\n",
+                "fuck_around:\n    pass\nfind_out ValueError as exc:\n    pass\n",
+                ast.Try,
+            ),
+            (
+                "try:\n    pass\nexcept* ValueError as exc:\n    pass\n",
+                "fuck_around:\n    pass\nfind_out* ValueError as exc:\n    pass\n",
+                ast.TryStar,
+            ),
+        ]
+        for original, alias, node_type in cases:
+            with self.subTest(node_type=node_type.__name__):
+                original_ast = ast.parse(original)
+                alias_ast = ast.parse(alias)
+                self.assertIsInstance(alias_ast.body[0], node_type)
+                self.assertEqual(
+                    ast.dump(alias_ast, include_attributes=False),
+                    ast.dump(original_ast, include_attributes=False),
+                )
 
     def test_suite(self):
         # simple_stmt | NEWLINE INDENT NEWLINE* (stmt NEWLINE*)+ DEDENT
