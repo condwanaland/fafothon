@@ -1,0 +1,343 @@
+name: Synchronize with CPython upstream
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate the synchronization without publishing commits or tags
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: sync-cpython-upstream
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Rebase, regenerate, build, and test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      update_needed: ${{ steps.prepare.outputs.update_needed }}
+      original_sha: ${{ steps.prepare.outputs.original_sha }}
+      upstream_sha: ${{ steps.prepare.outputs.upstream_sha }}
+      result_sha: ${{ steps.result.outputs.result_sha }}
+    steps:
+      - name: Require main for a publishing run
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.dry_run == false &&
+          github.ref != 'refs/heads/main'
+        run: |
+          echo "Non-dry manual runs must be dispatched from main." >&2
+          exit 1
+
+      - name: Check out FAFOthon main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Refresh origin/main
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Prepare upstream rebase
+        id: prepare
+        run: |
+          cp .github/workflows/prepare-upstream-sync.sh \
+              "$RUNNER_TEMP/prepare-upstream-sync.sh"
+          "$RUNNER_TEMP/prepare-upstream-sync.sh"
+
+      - name: Install CPython build dependencies
+        id: dependencies
+        if: steps.prepare.outputs.update_needed == 'true'
+        run: sudo ./.github/workflows/posix-deps-apt.sh
+
+      - name: Configure isolated debug build
+        id: configure
+        if: steps.prepare.outputs.update_needed == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/fafothon-build"
+          cd "$RUNNER_TEMP/fafothon-build"
+          "$GITHUB_WORKSPACE/configure" --with-pydebug
+
+      - name: Regenerate parser and keywords
+        id: regenerate
+        if: steps.prepare.outputs.update_needed == 'true'
+        working-directory: ${{ runner.temp }}/fafothon-build
+        run: make regen-pegen regen-keyword
+
+      - name: Review and commit generated files
+        id: generated_files
+        if: steps.prepare.outputs.update_needed == 'true'
+        run: |
+          allowed=(Parser/parser.c Parser/parser_invalid.c Lib/keyword.py)
+
+          if ! git diff --quiet -- . \
+              ':(exclude)Parser/parser.c' \
+              ':(exclude)Parser/parser_invalid.c' \
+              ':(exclude)Lib/keyword.py'
+          then
+              echo "Regeneration changed unexpected tracked files:" >&2
+              git diff --name-only -- . \
+                  ':(exclude)Parser/parser.c' \
+                  ':(exclude)Parser/parser_invalid.c' \
+                  ':(exclude)Lib/keyword.py' >&2
+              exit 1
+          fi
+
+          if [[ -n $(git ls-files --others --exclude-standard) ]]; then
+              echo "Regeneration created unexpected untracked files:" >&2
+              git ls-files --others --exclude-standard >&2
+              exit 1
+          fi
+
+          git diff --check
+          if ! git diff --quiet -- "${allowed[@]}"; then
+              git config user.name github-actions[bot]
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git add -- "${allowed[@]}"
+              git -c commit.gpgsign=false commit \
+                  -m "Regenerate parser files after upstream sync"
+          fi
+
+          if [[ -n $(git status --porcelain=v1 --untracked-files=all) ]]; then
+              echo "The worktree is dirty after regeneration." >&2
+              git status --short >&2
+              exit 1
+          fi
+
+      - name: Build CPython
+        id: build
+        if: steps.prepare.outputs.update_needed == 'true'
+        working-directory: ${{ runner.temp }}/fafothon-build
+        run: make -j2
+
+      - name: Verify interpreter and FAFOthon syntax
+        id: smoke_test
+        if: steps.prepare.outputs.update_needed == 'true'
+        working-directory: ${{ runner.temp }}/fafothon-build
+        run: |
+          ./python - <<'PY'
+          import ast
+
+          events = []
+          fuck_around = "ordinary identifier"
+          find_out = "ordinary identifier"
+
+          fuck_around:
+              raise ValueError("new syntax")
+          find_out ValueError as error:
+              events.append(str(error))
+
+          try:
+              raise KeyError("mixed syntax")
+          find_out KeyError as error:
+              events.append(error.args[0])
+
+          fuck_around:
+              raise RuntimeError("original handler")
+          except RuntimeError as error:
+              events.append(str(error))
+
+          fuck_around:
+              raise ExceptionGroup("group", [TypeError("star handler")])
+          find_out* TypeError as error:
+              events.append(error.exceptions[0].args[0])
+
+          assert events == [
+              "new syntax",
+              "mixed syntax",
+              "original handler",
+              "star handler",
+          ]
+          assert (fuck_around, find_out) == (
+              "ordinary identifier",
+              "ordinary identifier",
+          )
+          assert isinstance(ast.parse("try:\n pass\nexcept: pass").body[0], ast.Try)
+          print("FAFOthon syntax and ordinary Python execution succeeded")
+          PY
+
+      - name: Run focused parser and exception tests
+        id: focused_tests
+        if: steps.prepare.outputs.update_needed == 'true'
+        working-directory: ${{ runner.temp }}/fafothon-build
+        run: >-
+          ./python -m test -j2 -u cpu
+          test_grammar test_ast test_syntax test_keyword test_exceptions
+          test_exception_group test_except_star test_peg_generator
+
+      - name: Run the CPython test suite
+        id: full_tests
+        if: steps.prepare.outputs.update_needed == 'true'
+        working-directory: ${{ runner.temp }}/fafothon-build
+        run: ./python -m test -j2 --timeout=1200
+
+      - name: Package the validated history
+        id: result
+        if: steps.prepare.outputs.update_needed == 'true'
+        run: |
+          original_sha=${{ steps.prepare.outputs.original_sha }}
+          upstream_sha=${{ steps.prepare.outputs.upstream_sha }}
+          base_sha=${{ steps.prepare.outputs.base_sha }}
+          result_sha=$(git rev-parse HEAD)
+          artifact_dir="$RUNNER_TEMP/fafothon-sync"
+
+          mkdir -p "$artifact_dir"
+          git bundle create "$artifact_dir/sync.bundle" \
+              refs/heads/sync-upstream-result "^$base_sha"
+          git bundle verify "$artifact_dir/sync.bundle"
+
+          printf '%s\n' "$original_sha" > "$artifact_dir/original-sha"
+          printf '%s\n' "$upstream_sha" > "$artifact_dir/upstream-sha"
+          printf '%s\n' "$result_sha" > "$artifact_dir/result-sha"
+          echo "result_sha=$result_sha" >> "$GITHUB_OUTPUT"
+
+          {
+              echo "### Validation succeeded"
+              echo
+              echo "Validated result: \`$result_sha\`"
+              if [[ '${{ github.event_name }}' == workflow_dispatch && \
+                    '${{ inputs.dry_run }}' == true ]]; then
+                  echo
+                  echo "Dry run requested; no commits or tags will be pushed."
+              fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload validated history
+        id: upload
+        if: steps.prepare.outputs.update_needed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fafothon-upstream-sync
+          path: ${{ runner.temp }}/fafothon-sync
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summarize validation failure
+        if: failure()
+        run: |
+          {
+              echo "### Upstream synchronisation validation failed"
+              echo
+              echo "The remote repository was not changed. Inspect the first failed step and its logs."
+              echo
+              echo "| Stage | Outcome |"
+              echo "| --- | --- |"
+              echo "| Rebase | ${{ steps.prepare.outcome }} |"
+              echo "| Dependencies | ${{ steps.dependencies.outcome }} |"
+              echo "| Configure | ${{ steps.configure.outcome }} |"
+              echo "| Regeneration | ${{ steps.regenerate.outcome }} |"
+              echo "| Generated-file review | ${{ steps.generated_files.outcome }} |"
+              echo "| Build | ${{ steps.build.outcome }} |"
+              echo "| Syntax smoke test | ${{ steps.smoke_test.outcome }} |"
+              echo "| Focused tests | ${{ steps.focused_tests.outcome }} |"
+              echo "| Full suite | ${{ steps.full_tests.outcome }} |"
+              echo "| Artifact upload | ${{ steps.upload.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Back up and publish main
+    needs: validate
+    if: >-
+      needs.validate.outputs.update_needed == 'true' &&
+      (github.event_name == 'schedule' || inputs.dry_run == false)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out current origin/main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Download validated history
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fafothon-upstream-sync
+          path: ${{ runner.temp }}/fafothon-sync
+
+      - name: Verify and publish validated history
+        id: publish_result
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/fafothon-sync
+        run: |
+          read_sha() {
+              local value
+              IFS= read -r value < "$1"
+              if [[ ! $value =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Invalid SHA in $1" >&2
+                  exit 1
+              fi
+              printf '%s' "$value"
+          }
+
+          original_sha=$(read_sha "$ARTIFACT_DIR/original-sha")
+          upstream_sha=$(read_sha "$ARTIFACT_DIR/upstream-sha")
+          expected_result_sha=$(read_sha "$ARTIFACT_DIR/result-sha")
+          backup_tag="backup/pre-upstream-sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          current_sha=$(git rev-parse refs/remotes/origin/main)
+          if [[ $current_sha != "$original_sha" ]]; then
+              echo "origin/main moved from $original_sha to $current_sha; refusing to publish." >&2
+              exit 1
+          fi
+
+          git bundle verify "$ARTIFACT_DIR/sync.bundle"
+          git fetch "$ARTIFACT_DIR/sync.bundle" \
+              refs/heads/sync-upstream-result:refs/heads/sync-upstream-result
+          result_sha=$(git rev-parse refs/heads/sync-upstream-result)
+          if [[ $result_sha != "$expected_result_sha" ]]; then
+              echo "The bundled result does not match the validated SHA." >&2
+              exit 1
+          fi
+          git merge-base --is-ancestor "$upstream_sha" "$result_sha"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$backup_tag" >/dev/null 2>&1; then
+              echo "Backup tag $backup_tag already exists; refusing to overwrite it." >&2
+              exit 1
+          fi
+
+          git tag "$backup_tag" "$original_sha"
+          git push origin "refs/tags/$backup_tag:refs/tags/$backup_tag"
+          remote_backup=$(git ls-remote --refs origin "refs/tags/$backup_tag" | awk '{print $1}')
+          if [[ $remote_backup != "$original_sha" ]]; then
+              echo "Could not confirm backup tag $backup_tag on origin." >&2
+              exit 1
+          fi
+
+          git push origin "$result_sha:refs/heads/main" \
+              "--force-with-lease=refs/heads/main:$original_sha"
+
+          published_sha=$(git ls-remote --refs origin refs/heads/main | awk '{print $1}')
+          if [[ $published_sha != "$result_sha" ]]; then
+              echo "origin/main does not match the validated result after push." >&2
+              exit 1
+          fi
+
+          {
+              echo "### Upstream synchronisation published"
+              echo
+              echo "Updated \`main\` from \`$original_sha\` to \`$result_sha\`."
+              echo "Backup tag: \`$backup_tag\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize publication failure
+        if: failure()
+        run: |
+          {
+              echo "### Upstream synchronisation publication failed"
+              echo
+              echo "The leased update did not complete. Inspect the publication log before retrying."
+              echo "A backup tag may have been created if failure occurred after that step."
+          } >> "$GITHUB_STEP_SUMMARY"
