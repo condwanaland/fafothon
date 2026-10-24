@@ -50,6 +50,9 @@ jobs:
       - name: Prepare upstream rebase
         id: prepare
         run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email \
+              "41898282+github-actions[bot]@users.noreply.github.com"
           cp .github/workflows/prepare-upstream-sync.sh \
               "$RUNNER_TEMP/prepare-upstream-sync.sh"
           "$RUNNER_TEMP/prepare-upstream-sync.sh"
@@ -100,8 +103,6 @@ jobs:
 
           git diff --check
           if ! git diff --quiet -- "${allowed[@]}"; then
-              git config user.name github-actions[bot]
-              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
               git add -- "${allowed[@]}"
               git -c commit.gpgsign=false commit \
                   -m "Regenerate parser files after upstream sync"
