@@ -7,7 +7,7 @@ I'm not a trained software engineer. My knowledge of programming started with a 
 
 So long before AI was a thing, my approach to programming has always been fairly rough. Smash some code together, click run, hope it works. 
 
-FAFOthon is a Python fork that fully embraces that lax approach to programming. It contains a key change to the `try...except` keywords that more accurately depict how the average programmer uses them. Instead of writing
+FAFOthon is a Python fork that fully embraces that lax approach to programming. It contains a change to the `try...except` keywords that more accurately depict how the average programmer uses them. Instead of writing
 
 ```
 deployment = {
