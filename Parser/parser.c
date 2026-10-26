@@ -3708,7 +3708,7 @@ import_from_rule(Parser *p)
             &&
             (_keyword_1 = _PyPegen_expect_token(p, 501))  // token='from'
             &&
-            (a = _loop1_18_rule(p))  // (('.' | '...'))+
+            (a = _loop1_19_rule(p))  // (('.' | '...'))+
             &&
             (_keyword_2 = _PyPegen_expect_token(p, 500))  // token='import'
             &&
@@ -3751,7 +3751,7 @@ import_from_rule(Parser *p)
         if (
             (_keyword = _PyPegen_expect_token(p, 501))  // token='from'
             &&
-            (a = _loop0_17_rule(p))  // (('.' | '...'))*
+            (a = _loop0_18_rule(p))  // (('.' | '...'))*
             &&
             (b = dotted_name_rule(p))  // dotted_name
             &&
