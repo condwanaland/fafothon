@@ -29,6 +29,31 @@ output() {
     fi
 }
 
+resolve_readme_replacement_conflict() {
+    local -a patch_changes unmerged_paths
+    local line
+
+    git rev-parse --verify --quiet REBASE_HEAD >/dev/null || return 1
+    while IFS= read -r line; do
+        unmerged_paths+=("$line")
+    done < <(git diff --name-only --diff-filter=U)
+    [[ ${#unmerged_paths[@]} == 1 ]] || return 1
+    [[ ${unmerged_paths[0]} == README.rst ]] || return 1
+    [[ $(git status --porcelain=v1 -- README.rst) == "UD README.rst" ]] ||
+        return 1
+
+    while IFS= read -r line; do
+        patch_changes+=("$line")
+    done < <(git diff-tree --no-commit-id --name-status -r REBASE_HEAD)
+    [[ ${#patch_changes[@]} == 2 ]] || return 1
+    [[ ${patch_changes[0]} == $'A\tREADME.md' ]] || return 1
+    [[ ${patch_changes[1]} == $'D\tREADME.rst' ]] || return 1
+
+    printf 'Resolving the expected README replacement conflict.\n'
+    git rm --quiet -- README.rst
+    GIT_EDITOR=: git rebase --continue
+}
+
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) ||
     fail "Run this script from a Git worktree."
 cd "$repo_root"
@@ -85,16 +110,20 @@ if ! GIT_SEQUENCE_EDITOR=: git rebase \
     --onto "$upstream_sha" \
     "$base_sha"
 then
-    {
-        printf '\nRebase status:\n'
-        git status --short
-        printf '\nUnmerged paths:\n'
-        git diff --name-only --diff-filter=U
-    } >&2
-    summary "### Upstream rebase conflict"
-    summary ""
-    summary "The rebase stopped without publishing anything. Resolve it locally and update the FAFOthon patchset separately."
-    exit 1
+    if resolve_readme_replacement_conflict; then
+        printf 'Rebase continued after replacing the upstream README.\n'
+    else
+        {
+            printf '\nRebase status:\n'
+            git status --short
+            printf '\nUnmerged paths:\n'
+            git diff --name-only --diff-filter=U
+        } >&2
+        summary "### Upstream rebase conflict"
+        summary ""
+        summary "The rebase stopped without publishing anything. Resolve it locally and update the FAFOthon patchset separately."
+        exit 1
+    fi
 fi
 
 git merge-base --is-ancestor "$upstream_sha" HEAD ||
