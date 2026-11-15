@@ -9,7 +9,6 @@ workflows:
         - 'actions/setup-python@v7.0.0'
         - 'actions/upload-artifact@v7.0.1'
         - 're-actors/alls-green@v1.3.0'
-    '.github/workflows/cache-cleanup-codeql.yml': []
     '.github/workflows/jit.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-python@v7.0.0'
@@ -70,6 +69,10 @@ workflows:
         - 'actions/checkout@v7.0.1'
     '.github/workflows/stale.yml':
         - 'actions/stale@v11.0.0'
+    '.github/workflows/sync-upstream.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'actions/download-artifact@v8.0.1'
+        - 'actions/upload-artifact@v7.0.1'
     '.github/workflows/tail-call.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-python@v7.0.0'
